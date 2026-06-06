@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json",
+  "title": "PerfContract Specification v1",
+  "description": "Machine-readable performance contract declarations for AI coding agents",
+  "type": "object",
+  "required": ["perfcontract", "environments", "budgets"],
+  "properties": {
+    "perfcontract": {
+      "type": "string",
+      "const": "v1",
+      "description": "Spec version identifier"
+    },
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference URL"
+    },
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    },
+    "environments": {
+      "type": "object",
+      "description": "Named environment definitions (design envelopes, not live state)",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/Environment"
+      }
+    },
+    "budgets": {
+      "type": "array",
+      "description": "Performance budget declarations",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/Budget"
+      }
+    }
+  },
+  "$defs": {
+    "Metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Service or system name"
+        },
+        "owner": {
+          "type": "string",
+          "description": "Owning team or individual"
+        },
+        "last_reviewed": {
+          "type": "string",
+          "format": "date",
+          "description": "Date this budget was last reviewed for accuracy"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief description of what this budget covers"
+        }
+      }
+    },
+    "Environment": {
+      "type": "object",
+      "description": "Design envelope describing conditions the code is designed for. Not a live deployment snapshot — acceptable for declared values to drift from actual infrastructure.",
+      "properties": {
+        "compute": {
+          "$ref": "#/$defs/Compute"
+        },
+        "deployment": {
+          "$ref": "#/$defs/Deployment"
+        },
+        "network": {
+          "$ref": "#/$defs/Network"
+        },
+        "constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Free-form constraints that don't fit structured fields"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Natural language context explaining why this environment matters and what tradeoffs it implies"
+        }
+      }
+    },
+    "Compute": {
+      "type": "object",
+      "description": "Available compute resources",
+      "properties": {
+        "cpu": {
+          "type": "string",
+          "description": "CPU budget in vCPU or millicpu notation (e.g., '2 vCPU', '500m')",
+          "examples": ["2 vCPU", "500m", "4 cores"]
+        },
+        "memory": {
+          "type": "string",
+          "description": "Memory budget in IEC binary units",
+          "pattern": "^[0-9]+(\\.[0-9]+)?\\s*(B|Ki|Mi|Gi|Ti)$",
+          "examples": ["4Gi", "512Mi", "256Mi"]
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["amd64", "arm64", "riscv64"],
+          "description": "Target CPU architecture"
+        },
+        "gpu": {
+          "type": "string",
+          "description": "GPU availability and type, or 'none'",
+          "examples": ["none", "nvidia-t4", "nvidia-a100"]
+        },
+        "storage": {
+          "type": "string",
+          "description": "Available local storage in IEC binary units",
+          "examples": ["100Gi", "1Ti"]
+        },
+        "storage_type": {
+          "type": "string",
+          "enum": ["ssd", "hdd", "nvme", "ephemeral"],
+          "description": "Storage medium characteristics"
+        }
+      }
+    },
+    "Deployment": {
+      "type": "object",
+      "description": "Deployment substrate and topology",
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": ["kubernetes", "bare-metal", "lambda", "ecs", "edge", "embedded"],
+          "description": "Deployment substrate type"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Expected replica count"
+        },
+        "region": {
+          "type": "string",
+          "description": "Deployment region identifier",
+          "examples": ["us-west-2", "eu-central-1"]
+        },
+        "scaling": {
+          "type": "string",
+          "enum": ["fixed", "hpa", "keda", "manual"],
+          "description": "Autoscaling strategy"
+        },
+        "tenancy": {
+          "type": "string",
+          "enum": ["dedicated", "shared", "burstable"],
+          "description": "Resource isolation model"
+        },
+        "orchestrator": {
+          "type": "string",
+          "description": "Orchestrator and version",
+          "examples": ["k8s 1.28", "nomad 1.6"]
+        }
+      }
+    },
+    "Network": {
+      "type": "object",
+      "description": "Network characteristics of the deployment environment",
+      "properties": {
+        "bandwidth": {
+          "type": "string",
+          "description": "Available link capacity in bps notation",
+          "examples": ["1Gbps", "100Mbps", "10Gbps"]
+        },
+        "latency": {
+          "type": "string",
+          "description": "Round-trip time to primary dependencies",
+          "examples": ["2ms", "50ms", "200ms"]
+        },
+        "latency_to_db": {
+          "type": "string",
+          "description": "RTT to database",
+          "examples": ["2ms", "5ms"]
+        },
+        "latency_to_cache": {
+          "type": "string",
+          "description": "RTT to cache layer",
+          "examples": ["0.5ms", "1ms"]
+        },
+        "jitter": {
+          "type": "string",
+          "description": "Latency variance (± value)",
+          "examples": ["5ms", "50ms"]
+        },
+        "packet_loss": {
+          "type": "string",
+          "description": "Expected packet loss rate",
+          "examples": ["0.1%", "2%"]
+        },
+        "mtu": {
+          "type": "integer",
+          "description": "Maximum transmission unit in bytes",
+          "examples": [1500, 9000]
+        },
+        "topology": {
+          "type": "string",
+          "enum": ["co-located", "cross-az", "cross-region", "satellite-link", "mesh"],
+          "description": "Network topology class"
+        },
+        "dns_resolution": {
+          "type": "string",
+          "description": "DNS lookup latency",
+          "examples": ["1ms", "50ms"]
+        }
+      }
+    },
+    "Budget": {
+      "type": "object",
+      "required": ["scope", "environment", "objectives"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "description": "Scope expression: system, service, endpoint:<path>, stream:<name>, component:<name>, class:<name>, function:<name>",
+          "pattern": "^(system|service|endpoint:.+|stream:.+|component:.+|class:.+|function:.+)$"
+        },
+        "environment": {
+          "type": "string",
+          "description": "Reference to a named environment definition"
+        },
+        "dependencies": {
+          "type": "array",
+          "description": "Downstream services whose response time this budget assumes",
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
+        },
+        "objectives": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/Objective"
+          }
+        }
+      }
+    },
+    "Objective": {
+      "type": "object",
+      "required": ["metric", "target"],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "description": "Metric name from the registry (e.g., latency.p99, memory.resident, custom.my_metric)",
+          "pattern": "^(latency|throughput|memory|cpu|io|concurrency|startup|queue|freshness|custom)\\..+$"
+        },
+        "target": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ],
+          "description": "Design goal — what we're optimizing for. Include units in string form (e.g., '50ms', '256Mi', '500')"
+        },
+        "tolerance": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ],
+          "description": "Acceptable under degraded conditions. Defaults to 2x target if omitted."
+        },
+        "stretch": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "number" }
+          ],
+          "description": "Exceptional performance — what we'd celebrate. Defaults to 0.5x target if omitted."
+        },
+        "override": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, allows this objective to relax a parent scope's budget (requires rationale)"
+        },
+        "at_scale": {
+          "type": "object",
+          "description": "Conditions under which this budget applies. Keys are domain-specific dimensions (entity_count, payload_size, branch_depth, etc.)",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "number" }
+            ]
+          }
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Natural language explaining WHY this budget exists — gives agents context for tradeoff decisions"
+        },
+        "verification": {
+          "$ref": "#/$defs/Verification"
+        }
+      }
+    },
+    "Dependency": {
+      "type": "object",
+      "required": ["service"],
+      "description": "A downstream service whose performance this budget depends on",
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "Name of the downstream service"
+        },
+        "call": {
+          "type": "string",
+          "description": "Specific RPC or API call (e.g., AssignDriver, ComputeRouteMatrix)"
+        },
+        "latency.p99": {
+          "type": "string",
+          "description": "Assumed p99 latency of the dependency"
+        },
+        "latency.p50": {
+          "type": "string",
+          "description": "Assumed p50 latency of the dependency"
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Why this dependency budget matters for the parent budget"
+        }
+      }
+    },
+    "Verification": {
+      "type": "object",
+      "description": "Hints for how to test this objective",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["load_test", "benchmark", "profile", "trace", "static_analysis"],
+          "description": "Verification approach"
+        },
+        "tool_hint": {
+          "type": "string",
+          "description": "Suggested tool for verification",
+          "examples": ["k6", "go_bench", "pprof", "criterion", "jmh", "pytest-benchmark", "hyperfine"]
+        },
+        "conditions": {
+          "type": "string",
+          "description": "Free-form description of test conditions (load level, duration, state)"
+        }
+      }
+    }
+  }
+}
