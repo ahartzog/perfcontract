@@ -61,6 +61,10 @@ metadata:
   last_reviewed: <date>
   description: <optional one-line summary>
 
+guidance: |
+  <natural-language executive summary — the TL;DR an agent reads
+  before parsing individual objectives>
+
 environments:
   <env-name>:
     compute: { ... }
@@ -79,6 +83,31 @@ budgets:
         stretch: <value>
         rationale: <string>
         verification: { ... }
+```
+
+### Guidance Block (recommended)
+
+A top-level `guidance` field carries a natural-language executive summary of the contract — the TL;DR an agent reads before parsing individual objectives. It answers a single question: *if you read nothing else here, what must you know?*
+
+The point is orientation. A contract is a list of structured objectives; `guidance` is the paragraph that tells you which of those objectives actually matters, what they depend on, and how to know if you've broken something. Without it, every consumer — human or agent — has to reverse-engineer the contract's intent from its values. With it, a project's CLAUDE.md can simply say "read `.perfcontract.yml`" and let the contract orient the reader itself, rather than restating the same constraints in prose that drifts out of sync.
+
+`guidance` is a multiline string, placed at the top level after `metadata` and before `environments`. It is recommended but not required. Good guidance covers:
+
+- **The binding constraint** — which objective is tightest, the one that breaks first
+- **The key dependency assumption** — what downstream behavior the budget relies on
+- **The failure mode to watch for** — the change pattern most likely to cause a regression
+- **How to verify** — the specific test or benchmark that catches a breach
+
+```yaml
+guidance: |
+  The /api/v1/plans endpoint must hold p99 < 50ms — that's the binding
+  constraint and the first thing to break under load. Nearly all of that
+  budget is spent waiting on plan-generator; if route scoring slows, the
+  endpoint breaches before anything else does. The other risk is allocation
+  pressure in scoreCandidates (called per-candidate in a hot loop) — heap
+  churn there triggers GC pauses that blow the latency budget. Verify
+  regressions with the k6 load test (50 concurrent users, warm cache) and
+  the go_bench benchmark on scoreCandidates.
 ```
 
 ### Environment Block (required)
@@ -554,6 +583,17 @@ metadata:
   owner: logistics-platform
   last_reviewed: 2026-06-01
 
+guidance: |
+  On edge-on-prem, memory is the binding constraint: memory.resident must
+  stay under 256Mi against a 512Mi pod limit, and the /api/v1/plans endpoint
+  must hold p99 < 50ms. Almost all of that latency budget is spent inside
+  plan-generator, so route scoring is where regressions show up first. The
+  sharpest failure mode is allocation in scoreCandidates — it runs per
+  candidate in a hot loop, and heap churn there both inflates memory.resident
+  and triggers GC pauses that breach the endpoint p99. Keep that path
+  allocation-free. Verify with the k6 load test on /api/v1/plans (50
+  concurrent users, warm cache) and the go_bench benchmark on scoreCandidates.
+
 environments:
   edge-on-prem:
     compute: { cpu: "2 vCPU", memory: "4Gi", architecture: arm64 }
@@ -631,7 +671,29 @@ budgets:
           conditions: "10 candidates, realistic payload"
 ```
 
-### CLAUDE.md Example
+### CLAUDE.md Reference (service with a `.perfcontract.yml`)
+
+When a service has a full `.perfcontract.yml`, its CLAUDE.md should *point at* the contract, not restate it. Duplicated budget values drift; a pointer never does. This is what the `guidance` field is for — the contract carries its own orientation, so CLAUDE.md stays a one-liner.
+
+```markdown
+## Performance Budgets
+
+This service uses PerfContract (v1). All performance budgets, environments,
+and verification hints live in [`.perfcontract.yml`](.perfcontract.yml) — that
+file is the single source of truth. Refer to it before changing hot paths,
+memory-sensitive code, or anything on a latency-budgeted endpoint.
+
+Start with the top-level `guidance` block: it's the executive summary of what's
+tightest, what the budgets depend on, and how to verify a change. The structured
+`budgets` give exact targets per scope.
+
+Do not copy budget values into this file — read them from the contract so they
+can't fall out of sync.
+```
+
+### CLAUDE.md Example (inline budgets, no separate file)
+
+For small projects without a standalone `.perfcontract.yml`, budgets can live directly in CLAUDE.md using shorthand:
 
 ```markdown
 ## Performance Budgets

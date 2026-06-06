@@ -18,6 +18,10 @@
     "metadata": {
       "$ref": "#/$defs/Metadata"
     },
+    "guidance": {
+      "type": "string",
+      "description": "Natural-language executive summary of the contract — the TL;DR an agent reads before parsing individual objectives. Should cover the binding constraint, the key dependency assumption, the failure mode to watch for, and how to verify. Recommended but not required."
+    },
     "environments": {
       "type": "object",
       "description": "Named environment definitions (design envelopes, not live state)",
