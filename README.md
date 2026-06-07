@@ -33,6 +33,97 @@ PerfContract defines:
 
 Budgets are LLM-native (every objective can carry a `rationale` the agent reasons over) and inherit across scope hierarchies, so a system-level target cascades down to the functions that have to honor it.
 
+## Quick Start
+
+No tooling to install — the consumer is your coding agent.
+
+**1. Drop a `.perfcontract.yml` at your repo root.** Start from the floor:
+
+```yaml
+perfcontract: v1
+$schema: "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json"
+
+metadata:
+  name: link-resolver
+
+# make this as broad or as specific as you want
+guidance: |
+  The /resolve endpoint is the hot path: p99 < 10ms is the binding
+  constraint, and it assumes the cache responds in < 1ms. Watch for a
+  synchronous DB call added on the cache-miss path — that breaches it.
+
+environments:
+  production:
+    compute: { cpu: "1 vCPU", memory: "512Mi" }
+    network: { latency_to_cache: "1ms" }
+
+budgets:
+  - scope: endpoint:/resolve
+    environment: production
+    objectives:
+      - metric: latency.p99
+        target: 10ms
+        tolerance: 25ms
+```
+
+**2. Point your agent at it.** Add one line to `CLAUDE.md` (or `.cursorrules`, or your agent's instructions):
+
+```markdown
+Before changing hot paths or latency-budgeted code, read `.perfcontract.yml`
+and respect its budgets. Start with the `guidance` block.
+```
+
+**3. That's it.** The file is self-interpreting — the header documents every field, so the agent needs nothing but the file itself. From now on, an agent touching `/resolve` knows it's working inside a 10ms budget that assumes a 1ms cache, and reasons accordingly.
+
+> **What enforces this in v0.1?** The consuming agent does, by reading the contract — there is no separate runtime or linter yet. The value comes from the budget being somewhere the agent can see it. Automated enforcement — CI checks, a VS Code status line — is [future work](#future-directions-out-of-scope-for-v1). The format ships first; tools consume it.
+
+## What It Changes
+
+A budget is only worth writing if it changes what gets built. Here's the same task given to an agent twice — once without a contract, once with.
+
+**The task:** *"Add ETA-based tie-breaking to `scoreCandidates` so candidates with equal scores are ordered by arrival time."*
+
+`scoreCandidates` is the hot loop in the route planner — called once per candidate per plan. Its contract objective:
+
+```yaml
+- scope: function:scoreCandidates
+  objectives:
+    - metric: memory.allocation
+      target: 512B
+      rationale: "Called per-candidate in a loop — allocation pressure causes GC pauses"
+```
+
+**Without the contract** — functionally correct, quietly over budget:
+
+```go
+func scoreCandidates(candidates []Candidate) *Plan {
+    etas := make(map[string]float64, len(candidates)) // new map every call
+    for _, c := range candidates {
+        etas[c.ID] = computeETA(c)
+    }
+    sort.Slice(candidates, func(i, j int) bool { ... })
+    // allocates ~len(candidates) entries on every invocation — GC churn in the hot loop
+}
+```
+
+The agent had no reason not to allocate. The code passes every test. The regression only shows up later as p99 drift under load — exactly the tribal-knowledge failure PerfContract exists to prevent.
+
+**With the contract**, the agent reads `memory.allocation < 512B` and its rationale *before* writing, and revises:
+
+```go
+// @perfcontract memory.allocation < 512B — hot loop, keep allocation-free
+func scoreCandidates(candidates []Candidate, etaBuf []float64) *Plan {
+    etaBuf = etaBuf[:0]                  // reuse caller-owned buffer, no allocation
+    for i, c := range candidates {
+        etaBuf = append(etaBuf, computeETA(c))
+        candidates[i].eta = etaBuf[i]
+    }
+    sort.Slice(candidates, func(i, j int) bool { ... }) // tie-break on c.eta
+}
+```
+
+Same feature. The budget turned an invisible regression into a design constraint the agent honored at write time — and left an inline annotation so the next agent inherits the same constraint.
+
 ## Core Principles
 
 | # | Principle | Rationale |
