@@ -1,0 +1,46 @@
+perfcontract: v1
+$schema: "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json"
+# Spec: https://github.com/ahartzog/perfcontract
+#
+# target:       design goal — what we're optimizing for
+# tolerance:    acceptable under degraded conditions (default: 2x target)
+# stretch:      exceptional — what we'd celebrate (default: 0.5x target)
+# at_scale:     conditions this budget assumes (e.g., entity_count: 15000)
+# dependencies: downstream services whose latency this budget relies on
+# guidance:     executive summary — read this first
+# rationale:    why this budget exists (on any field)
+# verification: how to test it (method, tool_hint, conditions)
+#
+# Scopes: system > service > endpoint/stream > component > class > function
+# Inheritance: children inherit environment + budgets; can only tighten.
+
+# Minimal valid contract — the floor: header, one environment, one budget.
+
+metadata:
+  name: link-resolver
+  owner: platform-team
+
+guidance: |
+  The /resolve endpoint is the hot path: p99 < 10ms is the binding constraint,
+  and it assumes the cache responds in < 1ms. The failure mode to watch is a
+  synchronous database call added on the cache-miss path — that breaches the
+  budget. Verify with the k6 load test on /resolve at sustained load, warm cache.
+
+environments:
+  production:
+    compute: { cpu: "1 vCPU", memory: "512Mi" }
+    deployment: { model: kubernetes, replicas: 4 }
+    network: { latency_to_cache: "1ms" }
+    rationale: "Latency-critical read path; the cache is the dependency that matters."
+
+budgets:
+  - scope: endpoint:/resolve
+    environment: production
+    objectives:
+      - metric: latency.p99
+        target: 10ms
+        tolerance: 25ms
+        verification:
+          method: load_test
+          tool_hint: k6
+          conditions: "200 rps sustained, warm cache"

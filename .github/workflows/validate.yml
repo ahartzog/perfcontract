@@ -1,0 +1,31 @@
+name: validate
+
+# Lints the spec and every reference contract:
+#  1. the JSON Schema itself is a well-formed 2020-12 schema
+#  2. every examples/*.perfcontract.yml validates against that schema
+# Keeps the two representations of the spec (README prose + schema) honest:
+# an example that drifts from the schema fails here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validator
+        run: pip install check-jsonschema
+
+      - name: Schema is a well-formed JSON Schema
+        run: check-jsonschema --check-metaschema v1/schema.json
+
+      - name: Reference contracts validate against the schema
+        run: check-jsonschema --schemafile v1/schema.json examples/*.perfcontract.yml

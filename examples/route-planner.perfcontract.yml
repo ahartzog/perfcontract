@@ -1,0 +1,107 @@
+perfcontract: v1
+$schema: "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json"
+# Spec: https://github.com/ahartzog/perfcontract
+#
+# target:       design goal — what we're optimizing for
+# tolerance:    acceptable under degraded conditions (default: 2x target)
+# stretch:      exceptional — what we'd celebrate (default: 0.5x target)
+# at_scale:     conditions this budget assumes (e.g., entity_count: 15000)
+# dependencies: downstream services whose latency this budget relies on
+# guidance:     executive summary — read this first
+# rationale:    why this budget exists (on any field)
+# verification: how to test it (method, tool_hint, conditions)
+#
+# Scopes: system > service > endpoint/stream > component > class > function
+# Inheritance: children inherit environment + budgets; can only tighten.
+
+metadata:
+  name: route-planner
+  owner: logistics-platform
+  last_reviewed: 2026-06-01
+
+guidance: |
+  On edge-on-prem, memory is the binding constraint: memory.resident must
+  stay under 256Mi against a 512Mi pod limit, and the /api/v1/plans endpoint
+  must hold p99 < 50ms. Almost all of that latency budget is spent inside
+  plan-generator, so route scoring is where regressions show up first. The
+  sharpest failure mode is allocation in scoreCandidates — it runs per
+  candidate in a hot loop, and heap churn there both inflates memory.resident
+  and triggers GC pauses that breach the endpoint p99. Keep that path
+  allocation-free. Verify with the k6 load test on /api/v1/plans (50
+  concurrent users, warm cache) and the go_bench benchmark on scoreCandidates.
+
+environments:
+  edge-on-prem:
+    compute: { cpu: "2 vCPU", memory: "4Gi", architecture: arm64 }
+    deployment: { model: kubernetes, replicas: 3 }
+    network: { bandwidth: "1Gbps", latency_to_db: "2ms" }
+    constraints:
+      - "Shared tenancy — noisy neighbor risk"
+      - "Intermittent connectivity to upstream services"
+    rationale: >
+      Regional depot edge deployment. Memory is the binding constraint.
+      Latency budgets assume co-located database with 2ms RTT.
+
+  cloud-dev:
+    compute: { cpu: "8 vCPU", memory: "32Gi" }
+    deployment: { model: kubernetes, replicas: 1 }
+    rationale: "Development environment — relaxed budgets for iteration speed"
+
+budgets:
+  - scope: service
+    environment: edge-on-prem
+    objectives:
+      - metric: memory.resident
+        target: 256Mi
+        tolerance: 384Mi
+        rationale: "Pod memory limit is 512Mi — need headroom for spikes"
+      - metric: startup.ready_time
+        target: 5s
+        tolerance: 10s
+        verification:
+          method: benchmark
+          conditions: "Cold start, no cached state"
+
+  - scope: endpoint:/api/v1/plans
+    environment: edge-on-prem
+    objectives:
+      - metric: latency.p99
+        target: 50ms
+        tolerance: 100ms
+        stretch: 25ms
+        verification:
+          method: load_test
+          tool_hint: k6
+          conditions: "50 concurrent users, 60s sustained, warm cache"
+      - metric: throughput.rps
+        target: 200
+        tolerance: 100
+
+  - scope: component:plan-generator
+    environment: edge-on-prem
+    objectives:
+      - metric: latency.p99
+        target: 200ms
+        tolerance: 500ms
+        rationale: "Computationally intensive path — keep the user-visible wait brief"
+      - metric: memory.allocation
+        target: 16Ki
+        tolerance: 32Ki
+        rationale: "Invoked frequently — allocation pressure causes GC pauses"
+        verification:
+          method: benchmark
+          tool_hint: go_bench
+
+  - scope: function:scoreCandidates
+    environment: edge-on-prem
+    objectives:
+      - metric: cpu.time_per_op
+        target: 2ms
+        stretch: 500µs
+        rationale: "Called per-candidate in a loop — dominates plan generation time"
+      - metric: memory.allocation
+        target: 512B
+        verification:
+          method: benchmark
+          tool_hint: go_bench
+          conditions: "10 candidates, realistic payload"

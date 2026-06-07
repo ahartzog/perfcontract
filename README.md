@@ -54,6 +54,19 @@ Budgets are LLM-native (every objective can carry a `rationale` the agent reason
 ```yaml
 perfcontract: v1
 $schema: "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json"
+# Spec: https://github.com/ahartzog/perfcontract
+#
+# target:       design goal — what we're optimizing for
+# tolerance:    acceptable under degraded conditions (default: 2x target)
+# stretch:      exceptional — what we'd celebrate (default: 0.5x target)
+# at_scale:     conditions this budget assumes (e.g., entity_count: 15000)
+# dependencies: downstream services whose latency this budget relies on
+# guidance:     executive summary — read this first
+# rationale:    why this budget exists (on any field)
+# verification: how to test it (method, tool_hint, conditions)
+#
+# Scopes: system > service > endpoint/stream > component > class > function
+# Inheritance: children inherit environment + budgets; can only tighten.
 
 metadata:
   name: <service-or-system-name>
@@ -84,6 +97,34 @@ budgets:
         rationale: <string>
         verification: { ... }
 ```
+
+### Recommended File Header
+
+An agent encountering a `.perfcontract.yml` for the first time shouldn't need to fetch an external spec or have a special skill loaded. The file should be **self-interpreting for the 95% case** — reading and respecting budgets. The full spec URL is there for the 5% case: authoring new objectives or extending the schema.
+
+The principle: **discovery is built into the artifact. No external dependency for comprehension.**
+
+Every file should open with a header comment block, placed after the `$schema` line and before `metadata`. It's a YAML comment — zero runtime cost, purely for agent and human comprehension. It names the spec, documents every field inline, and states the two rules an agent must know (scope ordering and inheritance):
+
+```yaml
+perfcontract: v1
+$schema: "https://raw.githubusercontent.com/ahartzog/perfcontract/main/v1/schema.json"
+# Spec: https://github.com/ahartzog/perfcontract
+#
+# target:       design goal — what we're optimizing for
+# tolerance:    acceptable under degraded conditions (default: 2x target)
+# stretch:      exceptional — what we'd celebrate (default: 0.5x target)
+# at_scale:     conditions this budget assumes (e.g., entity_count: 15000)
+# dependencies: downstream services whose latency this budget relies on
+# guidance:     executive summary — read this first
+# rationale:    why this budget exists (on any field)
+# verification: how to test it (method, tool_hint, conditions)
+#
+# Scopes: system > service > endpoint/stream > component > class > function
+# Inheritance: children inherit environment + budgets; can only tighten.
+```
+
+The header is recommended, not required — the contract is fully valid without it. But including it means a `.perfcontract.yml` carries its own field reference, so an agent can interpret the file with nothing but the file itself.
 
 ### Guidance Block (recommended)
 
@@ -536,6 +577,38 @@ All matching budgets apply — the most specific scope wins for any given metric
 
 ---
 
+## Implementing the Spec
+
+This section codifies the expected way to adopt PerfContract and the expected way an agent consumes it. The two are designed together: authors put everything an agent needs *in the file*, and agents read it in an order that gets to a correct decision cheaply.
+
+### Adopting PerfContract (service authors)
+
+The expected adoption pattern for a single service:
+
+1. **Create a `.perfcontract.yml` at the repo root.** Start from the [Recommended File Header](#recommended-file-header) and the [Full Example](#full-example-delivery-route-planner).
+2. **Declare at least one `environment`** (required) — the design envelope you're building for, not a live snapshot.
+3. **Write the `guidance` block first.** Before listing objectives, state the binding constraint, the key dependency, the failure mode to watch, and how to verify. It is the single highest-value field for a consuming agent.
+4. **Declare `budgets` from the broadest scope you can commit to** (`service`) down to the hot paths that actually matter (`component`, `function`). You don't need every scope — only the ones with real constraints.
+5. **Add a one-line pointer in CLAUDE.md** (see [CLAUDE.md Reference](#claudemd-reference-service-with-a-perfcontractyml)). Do not restate budgets there — they drift.
+
+That's the whole contract. Everything a consumer needs travels in the file; nothing external has to be fetched to read it.
+
+For the smallest thing that validates — the floor of header, one environment, one budget — see **[`examples/link-resolver.perfcontract.yml`](examples/link-resolver.perfcontract.yml)**. For the full vocabulary, see **[`examples/route-planner.perfcontract.yml`](examples/route-planner.perfcontract.yml)**.
+
+### Consuming Budgets Efficiently (agents)
+
+A contract is designed so an agent can interpret it with a bounded, cheap read — no external fetch in the common case. Read in this order; stop as soon as you have what the task needs:
+
+1. **Don't fetch the spec.** The file header documents every field and the two structural rules (scope ordering, inheritance). Fetch the spec URL only when *authoring* new objectives or extending the schema — the 5% case. Reading and respecting budgets — the 95% case — needs nothing but the file.
+2. **Read `guidance` first.** It is the executive summary: binding constraint, key dependency, failure mode, verification. For the common question — *"will my change breach a budget?"* — this is frequently the whole answer.
+3. **Resolve scope, then read only what matches.** Locate budgets whose scope covers the code you're touching (the walk-up [Resolution Order](#resolution-order) applies; most specific scope wins per metric). You don't parse every budget — just the chain from `service` down to the function or component you're in.
+4. **Apply inheritance lazily.** A scope inherits its parent's environment and objectives, and children only tighten. Compute the effective budget for your scope by walking up only as far as you need, not by materializing the whole tree.
+5. **Use `rationale` for tradeoffs, not just the number.** When a change forces a tradeoff, the rationale tells you what the budget is protecting — so you can choose correctly instead of mechanically.
+
+The ordering is deliberate: `guidance` → matching scope → rationale is the cheapest path to a correct decision. Reading a contract top to bottom is rarely necessary, and parsing the spec from a URL almost never is.
+
+---
+
 ## Agent Behavior Guide
 
 This section is informational — it describes how agents should consume PerfContract declarations. It is not normative (agents may implement different strategies).
@@ -573,103 +646,18 @@ When reviewing code changes, agents should:
 
 ## Examples
 
+The contracts below are committed as runnable reference files under [`examples/`](examples/) — copy one as a starting point. Every file in that directory is validated against [`v1/schema.json`](v1/schema.json) in CI ([`.github/workflows/validate.yml`](.github/workflows/validate.yml)), so the examples can't silently drift from the schema:
+
+```sh
+pip install check-jsonschema
+check-jsonschema --schemafile v1/schema.json examples/*.perfcontract.yml
+```
+
 ### Full Example: Delivery Route Planner
 
-```yaml
-perfcontract: v1
+**[`examples/route-planner.perfcontract.yml`](examples/route-planner.perfcontract.yml)** — a complete, schema-validated contract. It exercises the full vocabulary: the recommended header, a `guidance` block, two named environments, and budgets cascading from `service` → `endpoint` → `component` → `function`, with `rationale` and `verification` hints throughout.
 
-metadata:
-  name: route-planner
-  owner: logistics-platform
-  last_reviewed: 2026-06-01
-
-guidance: |
-  On edge-on-prem, memory is the binding constraint: memory.resident must
-  stay under 256Mi against a 512Mi pod limit, and the /api/v1/plans endpoint
-  must hold p99 < 50ms. Almost all of that latency budget is spent inside
-  plan-generator, so route scoring is where regressions show up first. The
-  sharpest failure mode is allocation in scoreCandidates — it runs per
-  candidate in a hot loop, and heap churn there both inflates memory.resident
-  and triggers GC pauses that breach the endpoint p99. Keep that path
-  allocation-free. Verify with the k6 load test on /api/v1/plans (50
-  concurrent users, warm cache) and the go_bench benchmark on scoreCandidates.
-
-environments:
-  edge-on-prem:
-    compute: { cpu: "2 vCPU", memory: "4Gi", architecture: arm64 }
-    deployment: { model: kubernetes, replicas: 3 }
-    network: { bandwidth: "1Gbps", latency_to_db: "2ms" }
-    constraints:
-      - "Shared tenancy — noisy neighbor risk"
-      - "Intermittent connectivity to upstream services"
-    rationale: >
-      Regional depot edge deployment. Memory is the binding constraint.
-      Latency budgets assume co-located database with 2ms RTT.
-
-  cloud-dev:
-    compute: { cpu: "8 vCPU", memory: "32Gi" }
-    deployment: { model: kubernetes, replicas: 1 }
-    rationale: "Development environment — relaxed budgets for iteration speed"
-
-budgets:
-  - scope: service
-    environment: edge-on-prem
-    objectives:
-      - metric: memory.resident
-        target: 256Mi
-        tolerance: 384Mi
-        rationale: "Pod memory limit is 512Mi — need headroom for spikes"
-      - metric: startup.ready_time
-        target: 5s
-        tolerance: 10s
-        verification:
-          method: benchmark
-          conditions: "Cold start, no cached state"
-
-  - scope: endpoint:/api/v1/plans
-    environment: edge-on-prem
-    objectives:
-      - metric: latency.p99
-        target: 50ms
-        tolerance: 100ms
-        stretch: 25ms
-        verification:
-          method: load_test
-          tool_hint: k6
-          conditions: "50 concurrent users, 60s sustained, warm cache"
-      - metric: throughput.rps
-        target: 200
-        tolerance: 100
-
-  - scope: component:plan-generator
-    environment: edge-on-prem
-    objectives:
-      - metric: latency.p99
-        target: 200ms
-        tolerance: 500ms
-        rationale: "Computationally intensive path — keep the user-visible wait brief"
-      - metric: memory.allocation
-        target: 16Ki
-        tolerance: 32Ki
-        rationale: "Invoked frequently — allocation pressure causes GC pauses"
-        verification:
-          method: benchmark
-          tool_hint: go_bench
-
-  - scope: function:scoreCandidates
-    environment: edge-on-prem
-    objectives:
-      - metric: cpu.time_per_op
-        target: 2ms
-        stretch: 500µs
-        rationale: "Called per-candidate in a loop — dominates plan generation time"
-      - metric: memory.allocation
-        target: 512B
-        verification:
-          method: benchmark
-          tool_hint: go_bench
-          conditions: "10 candidates, realistic payload"
-```
+A minimal floor (header + one environment + one budget) is in **[`examples/link-resolver.perfcontract.yml`](examples/link-resolver.perfcontract.yml)**.
 
 ### CLAUDE.md Reference (service with a `.perfcontract.yml`)
 
